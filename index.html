@@ -2,13 +2,29 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 核心更新：加入 viewport-fit=cover 以适配 iOS 安全区域 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>AI 面对面翻译助手</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-        body { font-family: 'Inter', 'system-ui', sans-serif; }
+        
+        :root {
+            /* 定义安全区域变量，确保在非 iOS 设备上默认为 0 */
+            --sab: env(safe-area-inset-bottom, 0px);
+            --sat: env(safe-area-inset-top, 0px);
+        }
+
+        body { 
+            font-family: 'Inter', 'system-ui', sans-serif;
+            overscroll-behavior-y: contain;
+            /* 使用 dvh 确保在工具栏弹出/收起时动态调整高度 */
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+        }
+
         .recording-pulse {
             animation: pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
         }
@@ -16,6 +32,7 @@
             0%, 100% { transform: scale(1); opacity: 1; }
             50% { transform: scale(1.1); opacity: 0.8; }
         }
+        
         .word-annotation {
             display: inline-flex;
             flex-direction: column;
@@ -34,33 +51,37 @@
             border-radius: 4px;
         }
         .rotate-180 { transform: rotate(180deg); }
+        
+        /* 隐藏 Safari 默认的弹性滚动阴影 */
+        #displayArea {
+            -webkit-overflow-scrolling: touch;
+        }
     </style>
 </head>
-<body class="bg-slate-100 min-h-screen flex flex-col items-center p-4">
+<body class="bg-slate-100 w-screen overflow-hidden items-center p-3 sm:p-4">
 
-    <!-- Partner Side (Top) -->
-    <div class="w-full max-w-2xl mb-4 rotate-180">
-        <div class="bg-white rounded-3xl p-6 shadow-md border border-slate-200 flex flex-col items-center gap-3">
-            <p class="text-xs font-bold text-slate-400 uppercase tracking-widest">Partner Side</p>
-            <button id="partnerMicBtn" class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl flex items-center justify-center gap-3 transition-all active:scale-95 shadow-lg shadow-emerald-100">
-                <i data-lucide="mic" class="w-6 h-6"></i>
-                <span class="font-bold text-lg">Tap to Speak (English)</span>
+    <!-- Partner Side (Top) - 适配顶部刘海/安全区 -->
+    <div class="w-full max-w-2xl mb-3 rotate-180 shrink-0" style="padding-bottom: var(--sat);">
+        <div class="bg-white rounded-2xl p-4 shadow-md border border-slate-200 flex flex-col items-center gap-2">
+            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Partner Side</p>
+            <button id="partnerMicBtn" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl flex items-center justify-center gap-2 transition-all active:scale-95 shadow-lg shadow-emerald-100">
+                <i data-lucide="mic" class="w-5 h-5"></i>
+                <span class="font-bold">Tap to Speak (English)</span>
             </button>
-            <p id="partnerStatus" class="text-sm font-medium text-slate-500">I will translate your English to Chinese</p>
+            <p id="partnerStatus" class="text-[10px] font-medium text-slate-500">English to Chinese Translation</p>
         </div>
     </div>
 
     <!-- Main Container -->
-    <div class="w-full max-w-2xl bg-white rounded-3xl shadow-2xl shadow-slate-300/50 overflow-hidden border border-slate-100 flex flex-col">
+    <div class="w-full max-w-2xl bg-white rounded-3xl shadow-2xl shadow-slate-300/50 overflow-hidden border border-slate-100 flex flex-col flex-1 min-h-0">
         <!-- Header -->
-        <div class="bg-indigo-600 p-5 text-white flex justify-between items-center">
+        <div class="bg-indigo-600 p-4 text-white flex justify-between items-center shrink-0">
             <div class="flex items-center gap-3">
                 <div class="p-2 bg-white/20 rounded-xl">
-                    <i data-lucide="languages" class="w-6 h-6"></i>
+                    <i data-lucide="languages" class="w-5 h-5"></i>
                 </div>
                 <div>
-                    <h1 class="text-lg font-bold leading-none">AI 面对面翻译</h1>
-                    <p class="text-indigo-100 text-[10px] mt-1 uppercase tracking-tighter">Whisper-1 + GPT-4o-Mini</p>
+                    <h1 class="text-base font-bold leading-none">AI 面对面翻译</h1>
                 </div>
             </div>
             <button id="settingsBtn" class="p-2 hover:bg-white/10 rounded-full transition-colors">
@@ -68,102 +89,106 @@
             </button>
         </div>
 
-        <!-- API Config (Collapsible) -->
-        <div id="settingsPanel" class="hidden p-6 bg-slate-50 border-b border-slate-200">
-            <label class="block text-sm font-semibold text-slate-700 mb-2">OpenAI API Key</label>
+        <!-- API Config -->
+        <div id="settingsPanel" class="hidden p-4 bg-slate-50 border-b border-slate-200 shrink-0">
+            <label class="block text-xs font-semibold text-slate-700 mb-2">OpenAI API Key</label>
             <div class="flex gap-2">
-                <input type="password" id="apiKeyInput" placeholder="sk-..." class="flex-1 px-4 py-2 rounded-xl border border-slate-300 outline-none text-sm focus:ring-2 focus:ring-indigo-500">
-                <button id="saveKeyBtn" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors">保存</button>
+                <input type="password" id="apiKeyInput" placeholder="sk-..." class="flex-1 px-4 py-2 rounded-xl border border-slate-300 outline-none text-xs focus:ring-2 focus:ring-indigo-500">
+                <button id="saveKeyBtn" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-medium">保存</button>
             </div>
         </div>
 
         <!-- Content Area -->
-        <div id="displayArea" class="p-6 min-h-[300px] flex flex-col gap-6 overflow-y-auto max-h-[50vh]">
-            <div id="placeholder" class="flex-1 flex flex-col items-center justify-center text-slate-300 gap-3 text-center py-12">
-                <i data-lucide="refresh-cw" class="w-10 h-10 opacity-20"></i>
+        <div id="displayArea" class="flex-1 p-5 overflow-y-auto bg-white">
+            <div id="placeholder" class="h-full flex flex-col items-center justify-center text-slate-300 gap-3 text-center py-10">
+                <i data-lucide="message-square" class="w-10 h-10 opacity-20"></i>
                 <p class="text-sm italic">等待对话开始...<br>点击上方或下方按钮录音</p>
             </div>
 
             <div id="resultCard" class="hidden space-y-6">
                 <div id="loadingIndicator" class="hidden flex items-center gap-3 text-indigo-500 animate-pulse">
                     <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
-                    <span class="text-sm font-medium">AI 正在处理...</span>
+                    <span class="text-xs font-medium">AI 正在处理...</span>
                 </div>
 
-                <div class="space-y-4">
+                <div class="space-y-4 pb-6">
                     <div class="group">
-                        <h3 id="inputLabel" class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">识别内容</h3>
+                        <h3 id="inputLabel" class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5">识别内容</h3>
                         <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                            <p id="originalText" class="text-slate-700 font-medium leading-relaxed"></p>
+                            <p id="originalText" class="text-slate-700 font-medium leading-relaxed text-sm"></p>
                         </div>
                     </div>
 
                     <div class="group">
-                        <h3 id="outputLabel" class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">翻译结果</h3>
-                        <div id="translatedContainer" class="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100 min-h-[80px] text-xl text-slate-900 leading-[2.6rem]">
+                        <h3 id="outputLabel" class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5">翻译结果</h3>
+                        <div id="translatedContainer" class="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100 text-lg text-slate-900 leading-[2.4rem]">
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- User Side (Bottom) -->
-        <div class="p-8 bg-slate-50 border-t border-slate-100 flex flex-col items-center">
-            <button id="userMicBtn" class="w-20 h-20 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-xl flex items-center justify-center transition-all active:scale-90 relative z-10">
-                <i id="userMicIcon" data-lucide="mic" class="w-8 h-8"></i>
+        <!-- User Side (Bottom Controls) - 适配底部安全区 -->
+        <div class="p-6 bg-slate-50 border-t border-slate-100 flex flex-col items-center shrink-0" style="padding-bottom: calc(1.5rem + var(--sab));">
+            <button id="userMicBtn" class="w-16 h-16 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-xl flex items-center justify-center transition-all active:scale-90 relative z-10">
+                <i id="userMicIcon" data-lucide="mic" class="w-7 h-7"></i>
             </button>
-            <p id="userStatus" class="mt-4 text-sm font-bold text-slate-600 uppercase tracking-wider">Tap to Speak (Chinese)</p>
+            <p id="userStatus" class="mt-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-center">Tap to Speak (Chinese)</p>
         </div>
     </div>
 
     <!-- Cost Monitor -->
-    <div class="fixed bottom-6 right-6 flex flex-col items-end gap-2 group">
-        <div id="costDetail" class="hidden group-hover:flex bg-white shadow-2xl border border-slate-200 rounded-2xl p-4 flex-col gap-2 mb-2 scale-in-br origin-bottom-right">
-            <div class="flex justify-between gap-8 text-[10px] uppercase font-bold text-slate-400">
+    <div class="fixed right-4 flex flex-col items-end gap-2 group z-50" style="bottom: calc(1rem + var(--sab));">
+        <div id="costDetail" class="hidden group-hover:flex bg-white shadow-2xl border border-slate-200 rounded-xl p-3 flex-col gap-1.5 mb-2 scale-in-br origin-bottom-right">
+            <div class="flex justify-between gap-6 text-[9px] uppercase font-bold text-slate-400">
                 <span>Whisper STT</span>
                 <span id="whisperCost">$0.00000</span>
             </div>
-            <div class="flex justify-between gap-8 text-[10px] uppercase font-bold text-slate-400">
-                <span>GPT Translation</span>
+            <div class="flex justify-between gap-6 text-[9px] uppercase font-bold text-slate-400">
+                <span>GPT Trans</span>
                 <span id="gptCost">$0.00000</span>
             </div>
             <div class="h-px bg-slate-100 my-1"></div>
-            <div class="flex justify-between gap-8 text-xs font-black text-indigo-600">
-                <span>SESSION TOTAL</span>
+            <div class="flex justify-between gap-6 text-[9px] font-black text-indigo-600">
+                <span>TOTAL</span>
                 <span id="totalCostDetail">$0.00000</span>
             </div>
         </div>
-        <div class="bg-white shadow-lg border border-slate-200 rounded-full px-4 py-2 flex items-center gap-2 cursor-pointer hover:border-indigo-300 transition-all">
-            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            <span id="totalCostDisplay" class="font-mono text-[10px] font-black text-slate-800">$0.00000</span>
+        <div class="bg-white/90 backdrop-blur shadow-lg border border-slate-200 rounded-full px-3 py-1.5 flex items-center gap-2 cursor-pointer transition-all">
+            <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+            <span id="totalCostDisplay" class="font-mono text-[9px] font-black text-slate-800">$0.00000</span>
         </div>
     </div>
 
     <!-- Toast Error -->
-    <div id="errorBox" class="fixed bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded-full shadow-2xl hidden flex items-center gap-2 z-50">
+    <div id="errorBox" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-red-600 text-white px-5 py-2.5 rounded-full shadow-2xl hidden flex items-center gap-2 z-[60]">
         <i data-lucide="alert-circle" class="w-4 h-4"></i>
-        <span id="errorMessage" class="text-sm font-medium"></span>
+        <span id="errorMessage" class="text-xs font-medium"></span>
     </div>
 
     <script>
         lucide.createIcons();
 
-        // Config & Constants
+        // 尝试诱导 Safari 收起工具栏的小技巧
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                window.scrollTo(0, 1);
+            }, 100);
+        });
+
         const PRICING = {
-            whisper: 0.006, // $0.006/min
+            whisper: 0.006,
             gpt4oMini: { input: 0.150 / 1e6, output: 0.600 / 1e6 }
         };
 
-        // State
         let mediaRecorder;
         let audioChunks = [];
         let isRecording = false;
-        let recordingSource = null; // 'user' or 'partner'
+        let recordingSource = null;
         let recordingStartTime;
         let apiKey = localStorage.getItem('openai_api_key') || '';
         let sessionStats = { whisperUSD: 0, gptUSD: 0, totalUSD: 0 };
 
-        // DOM Elements
         const userMicBtn = document.getElementById('userMicBtn');
         const partnerMicBtn = document.getElementById('partnerMicBtn');
         const userMicIcon = document.getElementById('userMicIcon');
@@ -178,6 +203,7 @@
         const outputLabel = document.getElementById('outputLabel');
         const apiKeyInput = document.getElementById('apiKeyInput');
         const settingsPanel = document.getElementById('settingsPanel');
+        const displayArea = document.getElementById('displayArea');
         
         if (apiKey) apiKeyInput.value = apiKey;
 
@@ -205,7 +231,9 @@
             }
 
             if (isRecording) {
-                mediaRecorder.stop();
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
                 return;
             }
 
@@ -225,12 +253,15 @@
                     const blob = new Blob(audioChunks, { type: 'audio/webm' });
                     processAudio(blob, source);
                     setUIState(false, source);
+                    
+                    // 录音结束后释放媒体流
+                    stream.getTracks().forEach(track => track.stop());
                 };
 
                 mediaRecorder.start();
                 setUIState(true, source);
             } catch (err) {
-                showError("麦克风权限错误: " + err.message);
+                showError("麦克风错误: " + err.message);
             }
         }
 
@@ -242,7 +273,7 @@
                     userStatus.innerText = "Listening... (Tap to stop)";
                 } else {
                     partnerMicBtn.classList.add('recording-pulse', 'bg-red-500');
-                    partnerStatus.innerText = "Recording... Speak clearly";
+                    partnerStatus.innerText = "Recording English...";
                 }
             } else {
                 userMicBtn.classList.remove('recording-pulse', 'bg-red-500');
@@ -259,28 +290,30 @@
             originalTextEl.innerText = "";
             translatedContainer.innerHTML = "";
 
-            // Labeling
             inputLabel.innerText = source === 'user' ? "识别内容 (你)" : "Transcribed (Partner)";
             outputLabel.innerText = source === 'user' ? "翻译结果 (To English)" : "翻译结果 (给你的中文)";
 
             try {
-                // 1. STT
                 const formData = new FormData();
                 formData.append('file', blob, 'audio.webm');
                 formData.append('model', 'whisper-1');
-                formData.append('prompt', source === 'user' ? '中文对话，可能有英文单词。' : 'English speech, maybe with some accent.');
+                formData.append('prompt', source === 'user' ? '中文对话，可能有英文单词。' : 'English speech.');
 
                 const sttRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${apiKey}` },
                     body: formData
                 });
-                if (!sttRes.ok) throw new Error("识别失败");
+                if (!sttRes.ok) throw new Error("Whisper 识别失败");
                 const sttData = await sttRes.json();
                 originalTextEl.innerText = sttData.text;
 
-                // 2. Translation
                 await callAITranslator(sttData.text, source);
+                
+                setTimeout(() => {
+                    displayArea.scrollTo({ top: displayArea.scrollHeight, behavior: 'smooth' });
+                }, 100);
+
             } catch (err) {
                 showError(err.message);
                 loadingIndicator.classList.add('hidden');
@@ -289,25 +322,8 @@
 
         async function callAITranslator(text, source) {
             const systemPrompt = source === 'user' 
-                ? `你是一个地道的同声传译。
-                   任务：
-                   1. 将输入(中文或中英混合)翻译成自然的英文。
-                   2. 挑选出翻译中发音“不寻常、不符合常规拼读直觉”的少数重点单词。
-                   3. **注音规则**：排除类似 "cumulative", "international", "student" 这种可以通过常规自然拼读或词根逻辑轻松猜出的词。只关注类似 "colonel", "choir", "epitome", "chaos", "gauge", "indict" 等拼写与读音差异巨大的词。如果没有这类词，则不要提供 annotations。
-                   
-                   返回 JSON 格式：
-                   {
-                     "translation": "英文翻译全句",
-                     "annotations": [{"word": "单词", "phonetic": "/音标/"}]
-                   }`
-                : `你是一个专业的同声传译。
-                   任务：将输入的英文翻译成通俗易懂、地道的中文。
-                   
-                   返回 JSON 格式：
-                   {
-                     "translation": "中文翻译结果",
-                     "annotations": []
-                   }`;
+                ? `你是一个地道的同声传译。1. 将输入翻译成英文。2. 仅对发音“不寻常”且容易读错的极少数单词提供音标(排除容易猜出的词如cumulative)。返回 JSON: {"translation": "...", "annotations": [{"word": "...", "phonetic": "..."}]}`
+                : `你是一个专业的同声传译。将英文翻译成地道中文。返回 JSON: {"translation": "...", "annotations": []}`;
 
             try {
                 const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -326,10 +342,9 @@
                     })
                 });
 
-                if (!response.ok) throw new Error("翻译接口异常");
+                if (!response.ok) throw new Error("GPT 翻译失败");
                 const data = await response.json();
                 
-                // Track GPT Cost
                 if (data.usage) {
                     sessionStats.gptUSD += (data.usage.prompt_tokens * PRICING.gpt4oMini.input) + 
                                            (data.usage.completion_tokens * PRICING.gpt4oMini.output);
@@ -364,7 +379,6 @@
             translatedContainer.innerHTML = finalHtml;
         }
 
-        // Listeners
         userMicBtn.onclick = () => toggleRecording('user');
         partnerMicBtn.onclick = () => toggleRecording('partner');
         document.getElementById('settingsBtn').onclick = () => settingsPanel.classList.toggle('hidden');
