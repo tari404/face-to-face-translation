@@ -98,9 +98,14 @@
             <div>
                 <label class="block text-[10px] font-black text-slate-400 uppercase mb-2">OpenAI API Key</label>
                 <div class="flex gap-2">
-                    <input type="password" id="apiKeyInput" placeholder="sk-..." class="flex-1 px-4 py-2 rounded-xl border border-slate-300 outline-none text-xs focus:ring-2 focus:ring-indigo-500">
-                    <button id="saveKeyBtn" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-medium">保存</button>
+                    <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off" class="flex-1 px-4 py-2 rounded-xl border border-slate-300 outline-none text-xs focus:ring-2 focus:ring-indigo-500">
+                    <button id="saveKeyBtn" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-medium shrink-0">保存</button>
+                    <button id="clearKeyBtn" class="bg-slate-200 text-slate-600 px-3 py-2 rounded-xl text-xs font-medium shrink-0 hidden">清除</button>
                 </div>
+                <p id="apiKeyHint" class="mt-2 text-[10px] text-slate-400 leading-relaxed">
+                    Key 会保存在本机浏览器（IndexedDB / localStorage），刷新后无需重新输入。仅存于本设备，不会上传到本站服务器。
+                </p>
+                <p id="apiKeyStatus" class="mt-1 text-[10px] font-medium text-emerald-600 hidden">已保存到本机</p>
             </div>
             <div class="pt-2 border-t border-slate-200">
                 <label class="flex justify-between text-[10px] font-black text-slate-400 uppercase mb-2">
@@ -187,12 +192,134 @@
             gpt4oMini: { input: 0.150 / 1e6, output: 0.600 / 1e6 }
         };
 
+        const API_KEY_LS_KEY = 'openai_api_key';
+        const API_KEY_IDB_NAME = 'face-to-face-translation';
+        const API_KEY_IDB_STORE = 'settings';
+        const API_KEY_IDB_VERSION = 1;
+
+        // IndexedDB（Chromium 底层为 LevelDB）为主，localStorage 作同步缓存/回退
+        const apiKeyStore = {
+            openDb() {
+                return new Promise((resolve, reject) => {
+                    if (!window.indexedDB) {
+                        reject(new Error('IndexedDB unavailable'));
+                        return;
+                    }
+                    const request = indexedDB.open(API_KEY_IDB_NAME, API_KEY_IDB_VERSION);
+                    request.onupgradeneeded = () => {
+                        const db = request.result;
+                        if (!db.objectStoreNames.contains(API_KEY_IDB_STORE)) {
+                            db.createObjectStore(API_KEY_IDB_STORE);
+                        }
+                    };
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
+                });
+            },
+
+            async idbGet(key) {
+                const db = await this.openDb();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(API_KEY_IDB_STORE, 'readonly');
+                    const store = tx.objectStore(API_KEY_IDB_STORE);
+                    const request = store.get(key);
+                    request.onsuccess = () => {
+                        db.close();
+                        resolve(request.result || '');
+                    };
+                    request.onerror = () => {
+                        db.close();
+                        reject(request.error);
+                    };
+                });
+            },
+
+            async idbSet(key, value) {
+                const db = await this.openDb();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(API_KEY_IDB_STORE, 'readwrite');
+                    const store = tx.objectStore(API_KEY_IDB_STORE);
+                    const request = store.put(value, key);
+                    request.onsuccess = () => {
+                        db.close();
+                        resolve();
+                    };
+                    request.onerror = () => {
+                        db.close();
+                        reject(request.error);
+                    };
+                });
+            },
+
+            async idbRemove(key) {
+                const db = await this.openDb();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(API_KEY_IDB_STORE, 'readwrite');
+                    const store = tx.objectStore(API_KEY_IDB_STORE);
+                    const request = store.delete(key);
+                    request.onsuccess = () => {
+                        db.close();
+                        resolve();
+                    };
+                    request.onerror = () => {
+                        db.close();
+                        reject(request.error);
+                    };
+                });
+            },
+
+            lsGet() {
+                try {
+                    return localStorage.getItem(API_KEY_LS_KEY) || '';
+                } catch (_) {
+                    return '';
+                }
+            },
+
+            lsSet(value) {
+                try {
+                    if (value) localStorage.setItem(API_KEY_LS_KEY, value);
+                    else localStorage.removeItem(API_KEY_LS_KEY);
+                } catch (_) { /* private mode / quota */ }
+            },
+
+            async get() {
+                try {
+                    const fromIdb = await this.idbGet(API_KEY_LS_KEY);
+                    if (fromIdb) {
+                        this.lsSet(fromIdb);
+                        return fromIdb;
+                    }
+                } catch (_) { /* fall through */ }
+
+                const fromLs = this.lsGet();
+                if (fromLs) {
+                    try { await this.idbSet(API_KEY_LS_KEY, fromLs); } catch (_) { /* ignore */ }
+                }
+                return fromLs;
+            },
+
+            async set(value) {
+                const key = (value || '').trim();
+                this.lsSet(key);
+                try {
+                    if (key) await this.idbSet(API_KEY_LS_KEY, key);
+                    else await this.idbRemove(API_KEY_LS_KEY);
+                } catch (_) { /* localStorage already written */ }
+                return key;
+            },
+
+            async clear() {
+                return this.set('');
+            }
+        };
+
         let mediaRecorder;
         let audioChunks = [];
         let isRecording = false;
         let recordingSource = null;
         let recordingStartTime;
-        let apiKey = localStorage.getItem('openai_api_key') || '';
+        let apiKey = '';
         let sessionStats = { whisperUSD: 0, gptUSD: 0, totalUSD: 0 };
 
         const userMicBtn = document.getElementById('userMicBtn');
@@ -208,12 +335,30 @@
         const inputLabel = document.getElementById('inputLabel');
         const outputLabel = document.getElementById('outputLabel');
         const apiKeyInput = document.getElementById('apiKeyInput');
+        const clearKeyBtn = document.getElementById('clearKeyBtn');
+        const apiKeyStatus = document.getElementById('apiKeyStatus');
         const settingsPanel = document.getElementById('settingsPanel');
         const displayArea = document.getElementById('displayArea');
         const fontSizeSlider = document.getElementById('fontSizeSlider');
         const fontSizeVal = document.getElementById('fontSizeVal');
-        
-        if (apiKey) apiKeyInput.value = apiKey;
+
+        function updateApiKeyUI() {
+            if (apiKey) {
+                apiKeyInput.value = apiKey;
+                apiKeyStatus.classList.remove('hidden');
+                clearKeyBtn.classList.remove('hidden');
+            } else {
+                apiKeyInput.value = '';
+                apiKeyStatus.classList.add('hidden');
+                clearKeyBtn.classList.add('hidden');
+            }
+        }
+
+        async function initApiKey() {
+            apiKey = await apiKeyStore.get();
+            updateApiKeyUI();
+        }
+        initApiKey();
 
         fontSizeSlider.oninput = (e) => {
             const size = e.target.value;
@@ -230,11 +375,17 @@
             document.getElementById('totalCostDetail').innerText = fmt(sessionStats.totalUSD);
         }
 
-        function showError(msg) {
+        function showToast(msg, isError = true) {
             const errorBox = document.getElementById('errorBox');
             document.getElementById('errorMessage').innerText = msg;
+            errorBox.classList.toggle('bg-red-600', isError);
+            errorBox.classList.toggle('bg-emerald-600', !isError);
             errorBox.classList.remove('hidden');
             setTimeout(() => errorBox.classList.add('hidden'), 5000);
+        }
+
+        function showError(msg) {
+            showToast(msg, true);
         }
 
         async function toggleRecording(source) {
@@ -384,11 +535,21 @@
         userMicBtn.onclick = () => toggleRecording('user');
         partnerMicBtn.onclick = () => toggleRecording('partner');
         document.getElementById('settingsBtn').onclick = () => settingsPanel.classList.toggle('hidden');
-        document.getElementById('saveKeyBtn').onclick = () => {
-            apiKey = document.getElementById('apiKeyInput').value.trim();
-            localStorage.setItem('openai_api_key', apiKey);
+        document.getElementById('saveKeyBtn').onclick = async () => {
+            const nextKey = document.getElementById('apiKeyInput').value.trim();
+            if (!nextKey) {
+                showError("请输入 API Key");
+                return;
+            }
+            apiKey = await apiKeyStore.set(nextKey);
+            updateApiKeyUI();
             settingsPanel.classList.add('hidden');
-            showError("API Key 已更新");
+            showToast("API Key 已保存到本机", false);
+        };
+        clearKeyBtn.onclick = async () => {
+            apiKey = await apiKeyStore.clear();
+            updateApiKeyUI();
+            showToast("已清除本机保存的 API Key", false);
         };
 
     </script>
